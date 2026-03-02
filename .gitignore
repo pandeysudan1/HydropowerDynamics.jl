@@ -1,0 +1,20 @@
+# Julia
+Manifest.toml
+*.jl.cov
+*.jl.*.cov
+*.jl.mem
+/docs/build/
+/docs/site/
+
+# Data files (raw Excel — not versioned; only processed CSV is kept)
+quick_examples/data/*.xlsx
+
+# Temporary output files
+*.txt
+!README.md
+!quick_examples/**/*.md
+!quick_examples/trollheim_experimental/ANALYSIS.md
+
+# OS
+.DS_Store
+Thumbs.db
