@@ -32,11 +32,14 @@ end
 
 # ---------------------------------------------------------------------------- #
 # Signal domain  (causal – no flow variable, no Kirchhoff sum)
+#
+# Delegated to ModelingToolkitStandardLibrary.Blocks so that:
+#   • connect(sensor.w, :y, governor.speed_in)  — analysis-point tagging works
+#   • Blocks.get_sensitivity / get_looptransfer  — can intercept these nodes
+#   • All MTSL causal blocks (Feedback, FirstOrder, LimPID…) are plug-compatible
+#
+# Blocks.RealInput  has port variable  u(t)  — same name as our old custom port,
+# so all existing components (turbine, mechanical) are drop-in compatible.
 # ---------------------------------------------------------------------------- #
-@connector SignalInPort begin
-    u(t), [description = "Signal (input)"]
-end
-
-@connector SignalOutPort begin
-    u(t), [description = "Signal (output)"]
-end
+const SignalInPort  = Blocks.RealInput    # causal input  connector  (variable: u)
+const SignalOutPort = Blocks.RealOutput   # causal output connector  (variable: u)

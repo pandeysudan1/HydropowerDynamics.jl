@@ -73,13 +73,13 @@ end
 #   d(p_avg)/dt = B/(ρ·Vol) * (dm_in - dm_out)
 # ============================================================================ #
 """
-    Penstock(; name, L, D, rho, B, mu, e)
+    Penstock(; name, L, D_pipe, rho, B, mu, e)
 
 1-D penstock with water-hammer inertia and Darcy-Weisbach friction.
 
 **Parameters**
-- `L`   : pipe length [m]               (default 500.0)
-- `D`   : internal diameter [m]         (default 2.0)
+- `L`      : pipe length [m]               (default 500.0)
+- `D_pipe` : internal diameter [m]         (default 2.0)
 - `rho` : water density [kg/m³]         (default 1000.0)
 - `B`   : bulk modulus [Pa]             (default 2.0e9)
 - `mu`  : dynamic viscosity [Pa·s]      (default 1e-3)
@@ -89,12 +89,12 @@ end
 """
 @mtkmodel Penstock begin
     @parameters begin
-        L   = 500.0,   [description = "Pipe length [m]"]
-        D   = 2.0,     [description = "Internal diameter [m]"]
-        rho = 1000.0,  [description = "Water density [kg/m³]"]
-        B   = 2.0e9,   [description = "Bulk modulus [Pa]"]
-        mu  = 1.0e-3,  [description = "Dynamic viscosity [Pa·s]"]
-        e   = 1.5e-5,  [description = "Pipe roughness [m]"]
+        L      = 500.0,   [description = "Pipe length [m]"]
+        D_pipe = 2.0,     [description = "Internal diameter [m]"]
+        rho    = 1000.0,  [description = "Water density [kg/m³]"]
+        B      = 2.0e9,   [description = "Bulk modulus [Pa]"]
+        mu     = 1.0e-3,  [description = "Dynamic viscosity [Pa·s]"]
+        e      = 1.5e-5,  [description = "Pipe roughness [m]"]
     end
     @variables begin
         dm(t) = 0.0,    [description = "Mass flow rate [kg/s]"]
@@ -109,27 +109,29 @@ end
     end
     @equations begin
         # ── Derived geometry
-        # A  = π D² / 4   (scalar constant embedded below)
+        # A  = π D_pipe² / 4   (scalar constant embedded below)
         # Vol = A * L
 
         # ── Reynolds number (Eq. P.5)
-        Re ~ abs(dm) * D / (mu * (π * D^2 / 4))
+        Re ~ abs(dm) * D_pipe / (mu * (π * D_pipe^2 / 4))
 
-        # ── Swamee-Jain friction factor (Eq. P.4)
-        f_D ~ 0.25 / (log10(e / (3.7 * D) + 5.74 / (Re^0.9 + 1e-10)))^2
+        # ── Multi-regime Darcy friction factor (Eq. P.4)  [laminar + transition + turbulent]
+        f_D ~ darcy_factor(Re, D_pipe, e)
 
         # ── Darcy friction pressure drop (Eq. P.2)
-        dp_f ~ f_D * (L / D) * (dm / (rho * (π * D^2 / 4)))^2 * rho / 2
+        dp_f ~ f_D * (L / D_pipe) * (dm / (rho * (π * D_pipe^2 / 4)))^2 * rho / 2
 
         # ── Mass / momentum balance at connectors
         port_a.dm + port_b.dm ~ 0.0            # Kirchhoff flow (K2)
         port_a.dm ~ dm                         # sign convention: dm>0 → enters port_a
 
         # ── Momentum equation – water hammer inertia (Eq. P.1)
-        D(dm) ~ (π * D^2 / 4) / L * (port_a.p - port_b.p - dp_f)
+        D(dm) ~ (π * D_pipe^2 / 4) / L * (port_a.p - port_b.p - dp_f)
 
         # ── Compressibility continuity (Eq. P.3)
-        D(p_avg) ~ B / (rho * (π * D^2 / 4) * L) * (port_a.dm - port_b.dm)
+        # K2 sets port_b.dm = -port_a.dm, so (port_a.dm + port_b.dm) = 0 → p_avg stays at IC
+        # Using + here (not -) prevents the sign error that would make D(p_avg) = 2*B*dm/(ρ·A·L)
+        D(p_avg) ~ B / (rho * (π * D_pipe^2 / 4) * L) * (port_a.dm + port_b.dm)
     end
 end
 
@@ -142,39 +144,72 @@ end
 #   p_port         = p_atm + rho*g*Z  (ST.2)
 # ============================================================================ #
 """
-    SurgeTank(; name, A_t, Z_0, rho, g, p_atm)
+    SurgeTank(; name, A_t, Z_0, D_riser, L_riser, e_riser, rho, g, p_atm)
 
-Surge tank – free-surface pressure attenuator.
+Surge tank – free-surface pressure attenuator with riser throttle friction.
+
+The riser shaft connecting the tunnel to the tank chamber introduces a
+flow-dependent pressure drop that damps surge oscillations. The roughness
+height `e_riser` is the primary tuning parameter for damping strength.
 
 **Parameters**
-- `A_t`   : tank cross-sectional area [m²]   (default 50.0)
-- `Z_0`   : initial water level [m]           (default 10.0)
-- `rho`   : water density [kg/m³]             (default 1000.0)
-- `g`     : gravity [m/s²]                    (default 9.81)
-- `p_atm` : atmospheric pressure [Pa]         (default 101 325)
+- `A_t`     : tank chamber cross-sectional area [m²]   (default 9.08  — Trollheim: π/4·3.4²)
+- `Z_0`     : initial water level [m]                   (default 370.0 — Trollheim SS level)
+- `D_riser` : riser shaft diameter [m]                  (default 3.4   — Trollheim geometry)
+- `L_riser` : riser shaft length [m]                    (default 87.0  — Trollheim height extent)
+- `e_riser` : riser roughness height [m]                (default 1e-2  — unlined rock)
+- `rho`     : water density [kg/m³]                     (default 1000.0)
+- `g`       : gravity [m/s²]                            (default 9.81)
+- `p_atm`   : atmospheric pressure [Pa]                 (default 101 325)
 
-**Port** : `port` (HydraulicPort)
+**Port** : `port` (HydraulicPort) — connects at base of riser
+
+**Notes**
+- `e_riser = 4.6e-5` m  →  smooth steel  (minimal damping)
+- `e_riser = 1.0e-3` m  →  concrete/shotcrete  (moderate damping)
+- `e_riser = 1.0e-2` m  →  unlined blasted rock  (strong damping)
 """
 @mtkmodel SurgeTank begin
     @parameters begin
-        A_t   = 50.0,    [description = "Tank cross-section [m²]"]
-        Z_0   = 10.0,    [description = "Initial water level [m]"]
-        rho   = 1000.0,  [description = "Water density [kg/m³]"]
-        g     = 9.81,    [description = "Gravity [m/s²]"]
-        p_atm = 101_325.0, [description = "Atm. pressure [Pa]"]
+        A_t     = 9.08,      [description = "Tank chamber cross-section [m²]"]
+        Z_0     = 370.0,     [description = "Initial water level [m]"]
+        D_riser = 3.4,       [description = "Riser shaft diameter [m]"]
+        L_riser = 87.0,      [description = "Riser shaft length [m]"]
+        e_riser = 1.0e-2,    [description = "Riser roughness height [m]"]
+        rho     = 1000.0,    [description = "Water density [kg/m³]"]
+        g       = 9.81,      [description = "Gravity [m/s²]"]
+        p_atm   = 101_325.0, [description = "Atm. pressure [Pa]"]
+        mu      = 1.0e-3,    [description = "Dynamic viscosity [Pa·s]"]
     end
     @variables begin
-        Z(t) = 10.0,  [description = "Water level in tank [m]"]
+        Z(t) = 370.0,        [description = "Water surface elevation in tank [m]"]
+        Re_riser(t),         [description = "Reynolds number in riser [-]"]
+        f_riser(t),          [description = "Darcy friction factor in riser [-]"]
+        v_riser(t),          [description = "Flow velocity in riser [m/s]"]
+        dp_riser(t),         [description = "Riser friction pressure drop [Pa]"]
     end
     @components begin
         port = HydraulicPort()
     end
     @equations begin
+        # Riser geometry (area = π/4 * D_riser²)
+        v_riser  ~ port.dm / (rho * (π * D_riser^2 / 4.0))
+
+        # Reynolds number in riser
+        Re_riser ~ abs(port.dm) * D_riser / (mu * (π * D_riser^2 / 4.0))
+
+        # Multi-regime friction factor (laminar + transition + turbulent)
+        f_riser  ~ darcy_factor(Re_riser, D_riser, e_riser)
+
+        # Darcy-Weisbach pressure drop across riser (Eq. ST.3, sign-preserving)
+        dp_riser ~ f_riser * (L_riser / D_riser) * rho / 2.0 * v_riser * abs(v_riser)
+
         # Eq. ST.1 – free-surface continuity
         D(Z) ~ port.dm / (rho * A_t)
 
-        # Eq. ST.2 – hydrostatic pressure at port
-        port.p ~ p_atm + rho * g * Z
+        # Eq. ST.2 – hydrostatic pressure at port (base of riser) including throttle loss
+        # sign: inflow (dm>0) raises Z → riser friction reduces available pressure at port
+        port.p ~ p_atm + rho * g * Z - dp_riser
     end
 end
 

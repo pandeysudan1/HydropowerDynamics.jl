@@ -111,3 +111,99 @@ control design studies.
         flange.tau ~ -tau_gen
     end
 end
+
+# ============================================================================ #
+# RotationalSpeedSensor  (Section 4.4)
+#
+# Ideal non-invasive speed sensor: reads angular velocity from a rotational
+# port and outputs it as a causal signal.  Draws zero torque (ideal probe).
+#
+#   w.u = flange.omega                          (SS.1)
+#   flange.tau = 0                              (SS.2 – zero-power tap)
+#
+# Connection pattern (parallel tap — does not interrupt the mechanical chain):
+#   connect(rotor.flange_generator, speed_sensor.flange, generator.flange)
+#   connect(speed_sensor.w, :y_omega, governor.speed_in)
+#   ↑ the :y_omega tag enables Blocks.get_sensitivity(model, :y_omega)
+# ============================================================================ #
+"""
+    RotationalSpeedSensor(; name)
+
+Ideal rotational speed sensor.  Attaches like a voltmeter — in parallel on any
+`RotationalPort` node.  Outputs ω as a causal `SignalOutPort` (`w`).
+
+**Ports**
+- `flange` : RotationalPort  – tap point  (draws zero torque)
+- `w`      : SignalOutPort   – angular velocity ω [rad/s]
+"""
+@mtkmodel RotationalSpeedSensor begin
+    @components begin
+        flange = RotationalPort()
+        w      = SignalOutPort()
+    end
+    @equations begin
+        # Eq. SS.2 – ideal probe: no torque extracted
+        flange.tau ~ 0
+
+        # Eq. SS.1 – read across variable
+        w.u ~ flange.omega
+    end
+end
+
+# ============================================================================ #
+# MechanicalPowerSensor  (Section 4.5)
+#
+# Ideal in-line power meter.  Inserted between two rotational flanges;
+# passes torque and speed through unchanged (rigid, lossless coupling) while
+# outputting instantaneous shaft power as a causal signal.
+#
+#   flange_b.tau   = -flange_a.tau              (PS.1 – action-reaction)
+#   flange_b.omega = flange_a.omega             (PS.2 – speed continuity)
+#   flange_b.phi   = flange_a.phi               (PS.3 – position continuity)
+#   P.u = -flange_a.tau * flange_a.omega        (PS.4 – instantaneous power, positive when
+#                                                        driving from a→b)
+#
+# Sign convention for P.u:
+#   When the upstream component (e.g. turbine) sets shaft.tau = +τ and connects
+#   to flange_a, Kirchhoff gives flange_a.tau = -τ.  PS.4 negates this, so
+#   P.u = τ * ω > 0 (positive mechanical power flowing from driver to load).
+#
+# Connection pattern (in-line on mechanical shaft):
+#   connect(turbine.shaft,         power_sensor.flange_a)
+#   connect(power_sensor.flange_b, rotor.flange_turbine)
+#   connect(power_sensor.P,        governor.power_in)
+# ============================================================================ #
+"""
+    MechanicalPowerSensor(; name)
+
+Ideal in-line rotational power sensor.  Inserted in series on a mechanical
+shaft.  The `flange_a → flange_b` path is a perfect rigid coupling (zero energy
+storage or loss).
+
+**Ports**
+- `flange_a` : RotationalPort – upstream (driver) side
+- `flange_b` : RotationalPort – downstream (load) side
+- `P`         : SignalOutPort – shaft power [W]  (positive = power flows a→b)
+"""
+@mtkmodel MechanicalPowerSensor begin
+    @components begin
+        flange_a = RotationalPort()
+        flange_b = RotationalPort()
+        P        = SignalOutPort()
+    end
+    @equations begin
+        # Eq. PS.1 – rigid torque coupling (action-reaction)
+        flange_b.tau ~ -flange_a.tau
+
+        # Eq. PS.2 – speed continuity
+        flange_b.omega ~ flange_a.omega
+
+        # Eq. PS.3 – angle continuity
+        flange_b.phi ~ flange_a.phi
+
+        # Eq. PS.4 – instantaneous power (positive when power flows from a to b)
+        # Kirchhoff at flange_a node: flange_a.tau = -(upstream tau),
+        # so -flange_a.tau = upstream_tau > 0 when driven.
+        P.u ~ -flange_a.tau * flange_a.omega
+    end
+end

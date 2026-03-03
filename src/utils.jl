@@ -4,6 +4,59 @@
 # Equations from Section 6 & 7 of the HydroMTK Mathematical Reference.
 # ============================================================================ #
 
+# ── Friction factor models ───────────────────────────────────────────────────
+
+"""
+    darcy_factor(Re, D, e) -> f_D
+
+Multi-regime Darcy-Weisbach friction factor (dimensionless).
+
+Three regimes, C¹-continuous:
+- Laminar     Re ≤ 2100 : f = 64/Re                    (Hagen-Poiseuille)
+- Transition  2100<Re<2300 : cubic Hermite spline       (matched value + slope)
+- Turbulent   Re ≥ 2300 : Swamee-Jain variant           (Colebrook approximation)
+
+Registered with ModelingToolkit for use inside `@mtkmodel` equation blocks.
+"""
+function darcy_factor(Re, D, e)
+    Re_l = 2100.0
+    Re_t = 2300.0
+
+    f_l(r) = 64.0 / r
+    f_t(r) = 1.0 / (2.0 * log10(e / (3.7 * D) + 5.7 / (r^0.9)))^2
+
+    Re <= 0    && return 0.0
+    Re <= Re_l && return f_l(Re)
+    Re >= Re_t && return f_t(Re)
+
+    # Cubic Hermite spline — matches value and first derivative at both ends
+    y1  = f_l(Re_l)
+    y2  = f_t(Re_t)
+    dy1 = -64.0 / Re_l^2
+    δ   = 1e-3 * Re_t
+    dy2 = (f_t(Re_t + δ) - f_t(Re_t - δ)) / (2δ)
+    X   = [
+        Re_l^3   Re_l^2  Re_l  1.0
+        Re_t^3   Re_t^2  Re_t  1.0
+        3Re_l^2  2Re_l   1.0   0.0
+        3Re_t^2  2Re_t   1.0   0.0
+    ]
+    k = X \ [y1, y2, dy1, dy2]
+    return k[1]*Re^3 + k[2]*Re^2 + k[3]*Re + k[4]
+end
+@register_symbolic darcy_factor(Re, D, e)
+
+"""
+    swamee_jain(Re, D, e) -> f_D
+
+Swamee-Jain explicit approximation to the Colebrook-White equation.
+Valid for: 5×10³ ≤ Re ≤ 10⁸, 10⁻⁶ ≤ e/D ≤ 10⁻².
+Error < 3% vs Colebrook-White.
+"""
+swamee_jain(Re, D, e) =
+    0.25 / (log10(e / (3.7 * D) + 5.74 / (Re^0.9 + 1e-10)))^2
+@register_symbolic swamee_jain(Re, D, e)
+
 # ── Fluid constants (defaults) ───────────────────────────────────────────────
 const RHO_0  = 1000.0    # kg/m³  reference density
 const B_BULK = 2.0e9     # Pa     bulk modulus of water
